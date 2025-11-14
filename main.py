@@ -29,6 +29,7 @@ def hello():
                 <li><a href="/movietop/Аватар">Конкретный фильм</a></li>
                 <li><a href="/add">Добавление фильма</a></li>
                 <li><a href="/login-form">Окно регистрации</a></li>
+                <li><a href="/login-json?username=admin&password=password123">Регистрация при помощи json</a></li>
             </ul>
         </body>
     </html>
