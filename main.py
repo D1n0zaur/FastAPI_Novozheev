@@ -24,7 +24,7 @@ def hello():
             <h1>Здравствуйте</h1>
             <h3>Это моё решение курса FastAPI. Результаты доступны по ссылкам ниже</h3>
             <ul>
-                <li><a href="/study">Информация о фузе</a></li>
+                <li><a href="/study">Информация о ВУЗе</a></li>
                 <li><a href="/movietop">Список Фильмов</a></li>
                 <li><a href="/movietop/Аватар">Конкретный фильм</a></li>
                 <li><a href="/add">Добавление фильма</a></li>
@@ -266,10 +266,6 @@ async def login_form():
                     <li><strong>user</strong> / 123456</li>
                     <li><strong>demo</strong> / demo</li>
                 </ul>
-            </div>
-            
-            <div style="margin-top: 20px;">
-                <a href="/user">Попробовать получить профиль (требуется авторизация)</a>
             </div>
         </body>
     </html>
