@@ -1,10 +1,13 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, Depends, File, Form, Response, Cookie
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 import shutil
 import os
+from datetime import datetime
 
-from models import Movie
+from models import Movie, LoginResponse, UserProfileResponse, UserDataResponse
+from token_manager import token_manager
+from auth import get_current_user, get_optional_user, valid_users
 
 app = FastAPI()
 os.makedirs("static", exist_ok=True)
@@ -25,6 +28,7 @@ def hello():
                 <li><a href="/movietop">Список Фильмов</a></li>
                 <li><a href="/movietop/Аватар">Конкретный фильм</a></li>
                 <li><a href="/add">Добавление фильма</a></li>
+                <li><a href="/login-form">Окно регистрации</a></li>
             </ul>
         </body>
     </html>
@@ -138,3 +142,126 @@ async def add_movie(
         </body>
     </html>
 """)
+
+# B
+@app.post("/login", response_model=LoginResponse)
+async def login(
+    username: str = Form(...),
+    password: str = Form(...),
+    response: Response = None
+):
+    if username not in valid_users or valid_users[username] != password:
+        raise HTTPException(status_code=401, detail="Wrong username or password")
+    
+    session_token = token_manager.create_session(username)
+    session = token_manager.active_sessions[session_token]
+
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=False,
+        max_age=120,
+        samesite="lax"
+    )
+
+    return LoginResponse(
+        message="Successful log in",
+        username=username,
+        session_created=session.created_at,
+        session_expires=session.expires_at
+    )
+
+@app.post("/login-json", response_model=LoginResponse)
+async def login_json(data:dict, response: Response):
+    username = data.get("username")
+    password = data.get("password")
+
+    if not username or not password:
+        raise HTTPException(status_code=401, detail="Need username and password")
+    
+    return await login(username, password, response)
+
+@app.get("/user")
+def get_user_profile(current_user = Depends(get_current_user)):
+    now =datetime.now()
+
+    session_duration = now - current_user.created_at
+    time_until_expiry = current_user.expires_at - now
+
+    time_info = {
+        "login_time": current_user.created_at,
+        "session_start": current_user.created_at, 
+        "last_activity": current_user.last_activity,
+        "current_time": now,
+        "session_expires": current_user.expires_at,
+        "session_duration": session_duration,
+        "time_until_expiry": time_until_expiry
+    }
+
+    user_info = {
+        "username": current_user.username,
+        "is_active": True
+    }
+
+    return UserDataResponse(
+        user=user_info,
+        time_info=time_info,
+        message="Data successfully getted"
+    )
+
+@app.post("/logout")
+async def logout_post(response: Response, current_user = Depends(get_optional_user)):
+    if current_user:
+        user_sessions = token_manager.get_user_sessions(current_user.username)
+        for token in user_sessions.keys():
+            token_manager.delete_session(token)
+    
+    response.delete_cookie(key="session_token")
+    return {"message": "Successfully logged out"}
+
+@app.get("/logout")
+async def logout_get(response: Response, current_user = Depends(get_optional_user)):
+    if current_user:
+        user_sessions = token_manager.get_user_sessions(current_user.username)
+        for token in user_sessions.keys():
+            token_manager.delete_session(token)
+    
+    response.delete_cookie(key="session_token")
+    return RedirectResponse(url="/", status_code=303)
+
+@app.get("/login-form")
+async def login_form():
+    return HTMLResponse("""
+    <html>
+        <body style="font-family: Arial; max-width: 400px; margin: 50px auto; padding: 20px;">
+            <h2>Вход в систему</h2>
+            <form action="/login" method="post">
+                <div style="margin: 10px 0;">
+                    <label>Имя пользователя:</label><br>
+                    <input type="text" name="username" required style="width: 100%; padding: 8px;">
+                </div>
+                <div style="margin: 10px 0;">
+                    <label>Пароль:</label><br>
+                    <input type="password" name="password" required style="width: 100%; padding: 8px;">
+                </div>
+                <button type="submit" style="background: #007bff; color: white; padding: 10px 20px; border: none; cursor: pointer;">
+                    Войти
+                </button>
+            </form>
+            
+            <div style="margin-top: 20px; padding: 15px; background: #f8f9fa;">
+                <h4>Тестовые пользователи:</h4>
+                <ul>
+                    <li><strong>admin</strong> / password123</li>
+                    <li><strong>user</strong> / 123456</li>
+                    <li><strong>demo</strong> / demo</li>
+                </ul>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <a href="/user">Попробовать получить профиль (требуется авторизация)</a>
+            </div>
+        </body>
+    </html>
+    """)
