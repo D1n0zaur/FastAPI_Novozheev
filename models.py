@@ -6,3 +6,6 @@ class Movie(BaseModel):
     id: int
     cost: int
     director: str
+    oscar: Optional[bool] = False
+    description: Optional[str] = None
+    photo: Optional[str] = None
