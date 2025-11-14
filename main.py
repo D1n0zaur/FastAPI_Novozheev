@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, Depends, File, Form, Response, Cookie
+from fastapi import FastAPI, HTTPException, UploadFile, Depends, File, Form, Response, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 import shutil
@@ -180,6 +180,14 @@ async def login_json(data:dict, response: Response):
     if not username or not password:
         raise HTTPException(status_code=401, detail="Need username and password")
     
+    return await login(username, password, response)
+
+@app.get("/login-json", response_model=LoginResponse)
+async def login_json_get(
+    username: str = Query(..., description="Username for login"),
+    password: str = Query(..., description="Password for login"), 
+    response: Response = None
+):
     return await login(username, password, response)
 
 @app.get("/user")
