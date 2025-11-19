@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 class Movie(BaseModel):
     name: str
     id: int
-    cost: int
+    cost: float  # Изменено с int на float
     director: str
     oscar: Optional[bool] = False
     description: Optional[str] = None
@@ -35,3 +35,9 @@ class UserDataResponse(BaseModel):
     time_info: dict
     movies: dict
     message: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+    expires_in: int
+    expires_at: Optional[datetime] = None

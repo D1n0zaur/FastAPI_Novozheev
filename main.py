@@ -1,13 +1,14 @@
-from fastapi import FastAPI, HTTPException, UploadFile, Depends, File, Form, Response, Query
+from fastapi import FastAPI, HTTPException, UploadFile, Depends, File, Form, Response, Query, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 import shutil
 import os
 from datetime import datetime
+from typing import Optional
 
-from models import Movie, LoginResponse, UserProfileResponse, UserDataResponse
-from token_manager import token_manager
-from auth import get_current_user, get_optional_user, valid_users
+from models import Movie, LoginResponse, UserProfileResponse, UserDataResponse, TokenResponse, UserLogin
+from jwt_manager import jwt_manager, TokenData
+from jwt_auth import get_current_user, get_optional_user, valid_users
 
 app = FastAPI()
 os.makedirs("static", exist_ok=True)
@@ -29,7 +30,7 @@ def hello():
                 <li><a href="/movietop/Аватар">Конкретный фильм</a></li>
                 <li><a href="/add">Добавление фильма</a></li>
                 <li><a href="/login-form">Окно регистрации</a></li>
-                <li><a href="/login-json?username=admin&password=password123">Регистрация при помощи json</a></li>
+                <li><a href="/docs">Документация API</a></li>
             </ul>
         </body>
     </html>
@@ -60,16 +61,16 @@ async def get_study_page():
     return HTMLResponse(html_data)
 
 movies = [
-    Movie(id=1, name="Аватар", cost=237, director="Джеймс Кэмерон"),
-    Movie(id=2, name="Мстители: Финал", cost=356, director="Энтони и Джо Руссо"),
-    Movie(id=3, name="Титаник", cost=200, director="Джеймс Кэмерон"),
-    Movie(id=4, name="Звёздные войны: Пробуждение силы", cost=245, director="Дж. Дж. Абрамс"),
-    Movie(id=5, name="Мстители: Война бесконечности", cost=316, director="Энтони и Джо Руссо"),
-    Movie(id=6, name="Человек-паук: Нет пути домой", cost=200, director="Джон Уоттс"),
-    Movie(id=7, name="Король Лев", cost=45, director="Джон Фавро"),
-    Movie(id=8, name="Мстители", cost=220, director="Джосс Уидон"),
-    Movie(id=9, name="Форсаж 7", cost=190, director="Джеймс Ван"),
-    Movie(id=10, name="Холодное сердце 2", cost=150, director="Крис Бак и Дженнифер Ли")
+    Movie(id=1, name="Аватар", cost=237.0, director="Джеймс Кэмерон"),
+    Movie(id=2, name="Мстители: Финал", cost=356.0, director="Энтони и Джо Руссо"),
+    Movie(id=3, name="Титаник", cost=200.0, director="Джеймс Кэмерон"),
+    Movie(id=4, name="Звёздные войны: Пробуждение силы", cost=245.0, director="Дж. Дж. Абрамс"),
+    Movie(id=5, name="Мстители: Война бесконечности", cost=316.0, director="Энтони и Джо Руссо"),
+    Movie(id=6, name="Человек-паук: Нет пути домой", cost=200.0, director="Джон Уоттс"),
+    Movie(id=7, name="Король Лев", cost=45.0, director="Джон Фавро"),
+    Movie(id=8, name="Мстители", cost=220.0, director="Джосс Уидон"),
+    Movie(id=9, name="Форсаж 7", cost=190.0, director="Джеймс Ван"),
+    Movie(id=10, name="Холодное сердце 2", cost=150.0, director="Крис Бак и Дженнифер Ли")
 ]
 
 @app.get("/movietop")
@@ -83,11 +84,20 @@ def search_movie(input_name: str):
             return movie
     raise HTTPException(status_code=404, detail="Not Found")
 
-# Б
+# Б + Г
 @app.get("/add")
-def form():
-    return HTMLResponse("""
-        <form method="post" action="/add" enctype="multipart/form-data">
+def form(current_user: Optional[TokenData] = Depends(get_optional_user)):
+    if not current_user:
+        return HTMLResponse("""
+            <h2>Требуется авторизация</h2>
+            <p>Пожалуйста, войдите в систему чтобы добавить фильм.</p>
+            <a href="/login-form">Войти</a> | 
+            <a href="/">На главную</a>
+        """)
+    
+    return HTMLResponse(f"""
+        <h2><strong>👤 Авторизован как:</strong> {current_user.username}</h2>
+        <form method="post" action="/add_film" enctype="multipart/form-data">
             Название: <input name="name" required><br><br>
             Режиссёр: <input name="director" required><br><br>
             Бюджет: <input name="cost" type="number" step="0.1" required><br><br>
@@ -97,155 +107,75 @@ def form():
             <button>Добавить фильм</button>
         </form>
         <br>
+        <a href="/">На главную</a>
     """)
 
-@app.post("/add")
-async def add_movie(
+@app.post("/add_film")
+async def add_film_protected(
     name: str = Form(...),
     director: str = Form(...),
     cost: float = Form(...),
     description: str = Form(None),
     oscar: bool = Form(False),
-    photo: UploadFile = File(...)
+    photo: UploadFile = File(...),
+    current_user: TokenData = Depends(get_current_user)
 ):
-    file_extension = photo.filename.split('.')[-1]
-    photo_filename = f"movie_{len(movies) + 1}.{file_extension}"
-    photo_path = f"static/{photo_filename}"
+    try:
+        # Сохраняем обложку
+        file_extension = photo.filename.split('.')[-1]
+        # Очищаем имя пользователя от потенциально опасных символов
+        safe_username = "".join(c for c in current_user.username if c.isalnum() or c in ('-', '_'))
+        photo_filename = f"movie_{len(movies) + 1}_{safe_username}.{file_extension}"
+        photo_path = f"static/{photo_filename}"
 
-    with open(photo_path, "wb") as buffer:
-        shutil.copyfileobj(photo.file, buffer)
+        with open(photo_path, "wb") as buffer:
+            shutil.copyfileobj(photo.file, buffer)
 
-    new_id = len(movies) + 1
+        # Создаем новый фильм
+        new_id = max([movie.id for movie in movies], default=0) + 1
+        new_movie = Movie(
+            name=name, 
+            director=director, 
+            cost=cost, 
+            id=new_id, 
+            oscar=oscar,
+            photo=f"/static/{photo_filename}",
+            description=description
+        )
+        movies.append(new_movie)
 
-    new_movie = Movie(
-        name=name, 
-        director=director, 
-        cost=cost, 
-        id=new_id, 
-        oscar=oscar,
-        photo=f"/{photo_path}",
-        description=description
-    )
-    movies.append(new_movie)
+        return HTMLResponse(f"""
+        <html>
+            <body style="text-align: center; padding: 20px;">
+                <h1>Фильм добавлен!</h1>
+                <h2>Название: {new_movie.name}</h2>
+                <h2>Режиссёр: {new_movie.director}</h2>
+                <h2>Бюджет: {new_movie.cost} шекелей</h2>
+                <h2>Номинация на Оскар: {'Да' if new_movie.oscar else 'Нет'}</h2>
+                {f'<h3>Описание: {new_movie.description}</h3>' if new_movie.description else ''}
+                <img src="{new_movie.photo}" alt="Обложка фильма" style="max-width: 400px;">
+                <h2><strong>👤 Авторизован как:</strong> {current_user.username}</h2>
+                <br><br>
+                <a href="/">Перейти на лэндинг</a> | 
+                <a href="/add">Добавить еще фильм</a>
+            </body>
+        </html>
+        """)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при добавлении фильма: {str(e)}")
 
-    return HTMLResponse(f"""
-    <html>
-        <body style="text-align: center; padding: 20px;">
-            <h1>Фильм добавлен!</h1>
-            <h2>Название: {new_movie.name}</h2>
-            <h2>Режиссёр: {new_movie.director}</h2>
-            <h2>Бюджет: {new_movie.cost} шекелей</h2>
-            <h2>Номинация на Оскар: {'Да' if new_movie.oscar else 'Нет'}</h2>
-            {f'<h3>Описание: {new_movie.description}</h3>' if new_movie.description else ''}
-            <img src="{new_movie.photo}" alt="Обложка фильма" style="max-width: 400px;">
-            <br><br>
-            <a href="/">Перейти на лэндинг</a>
-        </body>
-    </html>
-""")
-
-# B
-@app.post("/login", response_model=LoginResponse)
-async def login(
-    username: str = Form(...),
-    password: str = Form(...),
-    response: Response = None
-):
-    if username not in valid_users or valid_users[username] != password:
-        raise HTTPException(status_code=401, detail="Wrong username or password")
-    
-    session_token = token_manager.create_session(username)
-    session = token_manager.active_sessions[session_token]
-
-    response.set_cookie(
-        key="session_token",
-        value=session_token,
-        httponly=True,
-        secure=False,
-        max_age=120,
-        samesite="lax"
-    )
-
-    return LoginResponse(
-        message="Successful log in",
-        username=username,
-        session_created=session.created_at,
-        session_expires=session.expires_at
-    )
-
-@app.post("/login-json", response_model=LoginResponse)
-async def login_json(data:dict, response: Response):
-    username = data.get("username")
-    password = data.get("password")
-
-    if not username or not password:
-        raise HTTPException(status_code=401, detail="Need username and password")
-    
-    return await login(username, password, response)
-
-@app.get("/login-json", response_model=LoginResponse)
-async def login_json_get(
-    username: str = Query(..., description="Username for login"),
-    password: str = Query(..., description="Password for login"), 
-    response: Response = None
-):
-    return await login(username, password, response)
-
-@app.get("/user")
-def get_user_profile(current_user = Depends(get_current_user)):
-    now =datetime.now()
-
-    session_duration = now - current_user.created_at
-    time_until_expiry = current_user.expires_at - now
-
-    time_info = {
-        "login_time": current_user.created_at,
-        "session_start": current_user.created_at, 
-        "last_activity": current_user.last_activity,
-        "current_time": now,
-        "session_expires": current_user.expires_at,
-        "session_duration": session_duration,
-        "time_until_expiry": time_until_expiry
-    }
-
-    user_info = {
-        "username": current_user.username,
-        "is_active": True
-    }
-
-    return UserDataResponse(
-        user=user_info,
-        time_info=time_info,
-        message="Data successfully getted"
-    )
-
-@app.post("/logout")
-async def logout_post(response: Response, current_user = Depends(get_optional_user)):
-    if current_user:
-        user_sessions = token_manager.get_user_sessions(current_user.username)
-        for token in user_sessions.keys():
-            token_manager.delete_session(token)
-    
-    response.delete_cookie(key="session_token")
-    return {"message": "Successfully logged out"}
-
-@app.get("/logout")
-async def logout_get(response: Response, current_user = Depends(get_optional_user)):
-    if current_user:
-        user_sessions = token_manager.get_user_sessions(current_user.username)
-        for token in user_sessions.keys():
-            token_manager.delete_session(token)
-    
-    response.delete_cookie(key="session_token")
-    return RedirectResponse(url="/", status_code=303)
-
+# Г
 @app.get("/login-form")
-async def login_form():
+async def login_form_page():
     return HTMLResponse("""
     <html>
-        <body style="font-family: Arial; max-width: 400px; margin: 50px auto; padding: 20px;">
-            <h2>Вход в систему</h2>
-            <form action="/login" method="post">
+        <head>
+            <title>Get JWT Token</title>
+        </head>
+        <body style="font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2>Получение JWT токена</h2>
+            
+            <form method="post" action="/login-form">
                 <div style="margin: 10px 0;">
                     <label>Имя пользователя:</label><br>
                     <input type="text" name="username" required style="width: 100%; padding: 8px;">
@@ -255,7 +185,7 @@ async def login_form():
                     <input type="password" name="password" required style="width: 100%; padding: 8px;">
                 </div>
                 <button type="submit" style="background: #007bff; color: white; padding: 10px 20px; border: none; cursor: pointer;">
-                    Войти
+                    Получить JWT токен
                 </button>
             </form>
             
@@ -267,6 +197,138 @@ async def login_form():
                     <li><strong>demo</strong> / demo</li>
                 </ul>
             </div>
+            
+            <div style="margin-top: 20px;">
+                <a href="/">На главную</a>
+            </div>
         </body>
     </html>
     """)
+
+@app.post("/login-form")
+async def process_login_form(
+    username: str = Form(...),
+    password: str = Form(...)
+):
+    try:
+        # Проверяем учетные данные
+        if username not in valid_users:
+            raise HTTPException(status_code=401, detail="Invalid username")
+        
+        if valid_users[username]["password"] != password:  # Исправлено здесь
+            raise HTTPException(status_code=401, detail="Invalid password")
+        
+        # Создаем токен
+        access_token = jwt_manager.create_access_token(
+            username=username,
+            user_id=valid_users[username]["user_id"]
+        )
+        
+        expiry = jwt_manager.get_token_expiry(access_token)
+        
+        return HTMLResponse(f"""
+        <html>
+            <body style="font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h2>✅ JWT Token получен!</h2>
+                
+                <div style="background: #d4edda; padding: 20px; margin: 20px 0; border-radius: 5px;">
+                    <h3>Ваш JWT токен:</h3>
+                    <div style="background: white; padding: 15px; border: 1px solid #ccc; border-radius: 3px;">
+                        <textarea style="width: 100%; height: 100px; font-family: monospace; border: none; resize: none;" readonly>{access_token}</textarea>
+                    </div>
+                    
+                    <div style="margin-top: 15px;">
+                        <p><strong>Тип токена:</strong> bearer</p>
+                        <p><strong>Истекает через:</strong> {jwt_manager.access_token_expire_minutes * 60} секунд</p>
+                        <p><strong>Время истечения:</strong> {expiry}</p>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 20px;">
+                    <h4>Как использовать токен:</h4>
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">
+                        <p><strong>Добавьте этот заголовок к вашим запросам:</strong></p>
+                        <code>Authorization: Bearer {access_token}</code>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 20px;">
+                    <a href="/add">Перейти к защищенной форме</a> | 
+                    <a href="/login-form">Получить новый токен</a> |
+                    <a href="/">На главную</a>
+                </div>
+            </body>
+        </html>
+        """)
+        
+    except HTTPException as e:
+        error_detail = e.detail
+        return HTMLResponse(f"""
+        <html>
+            <body style="font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h2>Ошибка авторизации</h2>
+                
+                <div style="background: #f8d7da; padding: 20px; margin: 20px 0; border-radius: 5px;">
+                    <h3>{error_detail}</h3>
+                    <p>Проверьте правильность введенных данных и попробуйте снова.</p>
+                </div>
+                
+                <a href="/login-form">Попробовать снова</a> | 
+                <a href="/">На главную</a>
+            </body>
+        </html>
+        """)
+    
+@app.post("/login", response_model=TokenResponse)
+async def login_jwt(user_data: UserLogin):
+    username = user_data.username
+    password = user_data.password
+    
+    # Проверяем учетные данные
+    if username not in valid_users:
+        raise HTTPException(status_code=401, detail="Invalid username")
+    
+    if valid_users[username]["password"] != password:  # Исправлено здесь
+        raise HTTPException(status_code=401, detail="Invalid password")
+    
+    # Создаем JWT токен
+    access_token = jwt_manager.create_access_token(
+        username=username,
+        user_id=valid_users[username]["user_id"]
+    )
+    
+    # Получаем время истечения токена
+    expiry = jwt_manager.get_token_expiry(access_token)
+    
+    return TokenResponse(
+        access_token=access_token,
+        token_type="bearer",
+        expires_in=jwt_manager.access_token_expire_minutes * 60,
+        expires_at=expiry
+    )
+
+@app.get("/verify-token")
+async def verify_token(authorization: Optional[str] = Header(None)):
+    if authorization is None or not authorization.startswith("Bearer "):
+        return {"valid": False, "message": "No token provided"}
+    
+    token = authorization.replace("Bearer ", "")
+    token_data = jwt_manager.verify_token(token)
+    
+    if token_data:
+        return {
+            "valid": True,
+            "username": token_data.username,
+            "user_id": token_data.user_id,
+            "expires_at": token_data.exp
+        }
+    else:
+        return {"valid": False, "message": "Invalid or expired token"}
+
+@app.get("/profile")
+async def get_profile(current_user: TokenData = Depends(get_current_user)):
+    return {
+        "username": current_user.username,
+        "user_id": current_user.user_id,
+        "expires_at": current_user.exp
+    }
